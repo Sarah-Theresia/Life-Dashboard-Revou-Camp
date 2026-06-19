@@ -2,7 +2,7 @@
 
 A modern, responsive productivity dashboard built with **HTML5, CSS3, and Vanilla JavaScript**. Inspired by Microsoft To Do, Trello, Notion, and Pomodoro Timer apps.
 
-![Dashboard Preview](assets/icon.svg)
+![Dashboard Preview](assets/dashboard preview.png)
 
 ---
 
