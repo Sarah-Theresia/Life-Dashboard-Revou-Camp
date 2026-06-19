@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Life & Daily Planner Dashboard — personal productivity, Kanban, Pomodoro, collaboration." />
+  <meta name="theme-color" content="#6c63ff" />
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <title>Life &amp; Daily Planner</title>
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- Feather Icons (lightweight SVG icon set, no framework) -->
+  <script src="https://unpkg.com/feather-icons" defer></script>
+
+  <!-- Firebase SDK v9 compat (plain script tags — NOT type="module", no bundler needed) -->
+  <!-- Must load BEFORE js/app.js so `firebase` global is available -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
+</head>
+<body>
+
+<!-- =====================================================
+     GLOBAL: Toast container (aria-live for screen readers)
+====================================================== -->
+<div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- =====================================================
+     GLOBAL: Full-page loading overlay
+====================================================== -->
+<div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-label="Loading">
+  <div class="loading-spinner"></div>
+  <p id="loading-message" class="loading-message">Loading…</p>
+</div>
+
+<!-- =====================================================
+     AUTH SCREEN
+====================================================== -->
+<div id="auth-screen" class="auth-screen hidden" role="main">
+  <div class="auth-card" role="region" aria-label="Authentication">
+
+    <div class="auth-logo" aria-hidden="true">
+      <i data-feather="layers"></i>
+      <span>Life Planner</span>
+    </div>
+
+    <!-- Tab switcher -->
+    <div class="auth-tabs" role="tablist" aria-label="Sign in or register">
+      <button class="auth-tab active" data-tab="login"    role="tab" aria-selected="true"  aria-controls="login-form">Sign In</button>
+      <button class="auth-tab"        data-tab="register" role="tab" aria-selected="false" aria-controls="register-form">Register</button>
+    </div>
+
+    <!-- LOGIN FORM -->
+    <form class="auth-form" id="login-form" role="tabpanel" novalidate>
+      <div class="form-group">
+        <label for="login-email">Email</label>
+        <input type="email" id="login-email" placeholder="you@example.com"
+               autocomplete="email" required aria-required="true" />
+      </div>
+      <div class="form-group">
+        <label for="login-password">Password</label>
+        <div class="password-wrap">
+          <input type="password" id="login-password" placeholder="••••••••"
+                 autocomplete="current-password" required aria-required="true" />
+          <button type="button" class="pw-toggle" data-target="login-password"
+                  aria-label="Toggle password visibility">
+            <i data-feather="eye"></i>
+          </button>
+        </div>
+      </div>
+      <button type="button" class="forgot-link" id="forgot-pw-btn">Forgot password?</button>
+      <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">
+        <span class="btn-text">Sign In</span>
+        <span class="btn-spinner hidden"><i data-feather="loader"></i></span>
+      </button>
+      <p class="auth-error hidden" id="login-error" role="alert"></p>
+    </form>
+
+    <!-- REGISTER FORM -->
+    <form class="auth-form hidden" id="register-form" role="tabpanel" novalidate>
+      <div class="form-group">
+        <label for="reg-name">Full Name</label>
+        <input type="text" id="reg-name" placeholder="Sarah Johnson"
+               autocomplete="name" required aria-required="true" />
+      </div>
+      <div class="form-group">
+        <label for="reg-email">Email</label>
+        <input type="email" id="reg-email" placeholder="you@example.com"
+               autocomplete="email" required aria-required="true" />
+      </div>
+      <div class="form-group">
+        <label for="reg-password">Password</label>
+        <div class="password-wrap">
+          <input type="password" id="reg-password" placeholder="Min. 6 characters"
+                 autocomplete="new-password" required minlength="6" aria-required="true" />
+          <button type="button" class="pw-toggle" data-target="reg-password"
+                  aria-label="Toggle password visibility">
+            <i data-feather="eye"></i>
+          </button>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="register-submit-btn">
+        <span class="btn-text">Create Account</span>
+        <span class="btn-spinner hidden"><i data-feather="loader"></i></span>
+      </button>
+      <p class="auth-error hidden" id="register-error" role="alert"></p>
+    </form>
+
+    <!-- Guest mode -->
+    <button class="btn btn-ghost btn-block btn-sm" id="guest-btn" style="margin-top:10px">
+      Continue without account (Local only)
+    </button>
+
+  </div>
+</div>
+
+<!-- =====================================================
+     MAIN APP
+====================================================== -->
+<div id="app" class="hidden">
+
+  <!-- HEADER -->
+  <header class="header" role="banner">
+    <div class="header-left">
+      <div class="app-logo" aria-label="Life Planner">
+        <i data-feather="layers" aria-hidden="true"></i>
+        <span class="app-name">Life Planner</span>
+      </div>
+
+      <div class="greeting-block">
+        <h1 class="greeting" id="greeting">Good morning, Friend!</h1>
+        <button class="icon-btn" id="edit-name-btn" aria-label="Edit your name" title="Edit your name">
+          <i data-feather="edit-2" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="clock-block" aria-live="off">
+        <time class="clock-time" id="clock-time" aria-label="Current time">00:00:00</time>
+        <span class="clock-sep" aria-hidden="true">·</span>
+        <time class="clock-date" id="clock-date" aria-label="Current date">Monday, January 1 2025</time>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Search -->
+      <div class="search-wrap" role="search">
+        <label for="search-input" class="sr-only">Search tasks</label>
+        <i data-feather="search" class="search-icon" aria-hidden="true"></i>
+        <input type="search" id="search-input" class="search-input"
+               placeholder="Search tasks…" autocomplete="off" />
+        <button class="search-clear hidden" id="search-clear" aria-label="Clear search">
+          <i data-feather="x" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <!-- Board selector -->
+      <div class="board-selector" id="board-selector-wrap">
+        <label for="board-selector" class="sr-only">Active board</label>
+        <select id="board-selector" class="board-select"></select>
+        <button class="icon-btn" id="new-board-btn" aria-label="Create new board" title="Create new board">
+          <i data-feather="plus-circle" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <!-- Filter toggles -->
+      <div class="filter-toggles" role="group" aria-label="Task filters">
+        <button class="filter-btn" id="filter-myday" aria-pressed="false" title="Tasks due today">
+          <i data-feather="sun" aria-hidden="true"></i><span>My Day</span>
+        </button>
+        <button class="filter-btn" id="filter-assigned" aria-pressed="false" title="Assigned to me">
+          <i data-feather="user" aria-hidden="true"></i><span>Assigned</span>
+        </button>
+      </div>
+
+      <button class="icon-btn header-action-btn" id="share-btn"       aria-label="Share and collaborate" title="Share &amp; Collaborate"><i data-feather="share-2" aria-hidden="true"></i></button>
+      <button class="icon-btn header-action-btn" id="email-share-btn" aria-label="Share tasks via email"  title="Share via Email"><i data-feather="mail"     aria-hidden="true"></i></button>
+      <button class="icon-btn header-action-btn" id="settings-btn"    aria-label="Open settings"          title="Settings"><i data-feather="settings" aria-hidden="true"></i></button>
+      <button class="icon-btn header-action-btn" id="theme-toggle"    aria-label="Toggle dark/light mode" title="Toggle theme"><i data-feather="moon"     aria-hidden="true"></i></button>
+
+      <!-- User avatar + dropdown -->
+      <div class="user-menu" id="user-menu">
+        <button class="user-avatar-btn" id="user-avatar-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+          <span id="user-initials" aria-hidden="true">?</span>
+        </button>
+        <div class="user-dropdown hidden" id="user-dropdown" role="menu" aria-label="Account options">
+          <p class="user-dropdown-name"  id="user-dropdown-name">Guest</p>
+          <p class="user-dropdown-email" id="user-dropdown-email"></p>
+          <hr />
+          <button class="dropdown-item" id="logout-btn" role="menuitem">
+            <i data-feather="log-out" aria-hidden="true"></i> Sign Out
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN BODY -->
+  <main class="main-body" id="main-body">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar" aria-label="Widgets">
+
+      <!-- Stats Widget -->
+      <section class="widget stats-widget" aria-labelledby="stats-title">
+        <h2 class="widget-title" id="stats-title"><i data-feather="bar-chart-2" aria-hidden="true"></i> Overview</h2>
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-item"><span class="stat-value" id="stat-total">0</span><span class="stat-label">Total</span></div>
+          <div class="stat-item"><span class="stat-value" id="stat-done">0</span><span class="stat-label">Done</span></div>
+          <div class="stat-item"><span class="stat-value" id="stat-progress">0</span><span class="stat-label">In Progress</span></div>
+          <div class="stat-item stat-overdue"><span class="stat-value" id="stat-overdue">0</span><span class="stat-label">Overdue</span></div>
+        </div>
+        <div class="stat-rate-wrap">
+          <span class="stat-rate-label">Completion</span>
+          <div class="stat-rate-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="stat-rate-fill" id="stat-rate-fill" style="width:0%"></div>
+          </div>
+          <span class="stat-rate-pct" id="stat-rate-pct">0%</span>
+        </div>
+      </section>
+
+      <!-- Focus Timer -->
+      <section class="widget timer-widget" aria-labelledby="timer-title">
+        <h2 class="widget-title" id="timer-title"><i data-feather="clock" aria-hidden="true"></i> Focus Timer</h2>
+        <div class="timer-display" id="timer-display" role="timer" aria-live="off" aria-label="Timer countdown">25:00</div>
+        <div class="timer-mode-row" role="group" aria-label="Timer presets">
+          <button class="timer-mode-btn active" data-mins="25" aria-pressed="true">25m</button>
+          <button class="timer-mode-btn"        data-mins="15" aria-pressed="false">15m</button>
+          <button class="timer-mode-btn"        data-mins="5"  aria-pressed="false">5m</button>
+        </div>
+        <div class="timer-duration-row">
+          <label for="timer-duration">Custom (min)</label>
+          <input type="number" id="timer-duration" min="1" max="120" value="25" aria-label="Custom timer duration in minutes" />
+        </div>
+        <div class="timer-controls" role="group" aria-label="Timer controls">
+          <button class="btn btn-primary  btn-sm" id="timer-start" aria-label="Start timer"><i data-feather="play"       aria-hidden="true"></i> Start</button>
+          <button class="btn btn-secondary btn-sm" id="timer-stop"  aria-label="Pause timer"><i data-feather="pause"      aria-hidden="true"></i> Pause</button>
+          <button class="btn btn-ghost    btn-sm" id="timer-reset" aria-label="Reset timer"><i data-feather="rotate-ccw" aria-hidden="true"></i> Reset</button>
+        </div>
+        <p class="timer-sessions" id="timer-sessions" aria-live="polite">Sessions today: 0</p>
+      </section>
+
+      <!-- My Day -->
+      <section class="widget myday-widget" aria-labelledby="myday-title">
+        <h2 class="widget-title" id="myday-title"><i data-feather="sun" aria-hidden="true"></i> My Day</h2>
+        <p class="myday-date" id="myday-date" aria-live="off">Today</p>
+        <ul class="myday-list" id="myday-list" aria-label="My Day tasks" aria-live="polite"></ul>
+        <button class="btn btn-ghost btn-sm add-myday-btn" id="add-myday-btn" aria-label="Add item to My Day">
+          <i data-feather="plus" aria-hidden="true"></i> Add to My Day
+        </button>
+      </section>
+
+      <!-- Quick Links -->
+      <section class="widget links-widget" aria-labelledby="links-title">
+        <h2 class="widget-title" id="links-title"><i data-feather="link" aria-hidden="true"></i> Quick Links</h2>
+        <ul class="links-list" id="links-list" aria-label="Quick links" aria-live="polite"></ul>
+        <form class="add-link-form hidden" id="add-link-form" aria-label="Add new quick link">
+          <div class="form-group">
+            <label for="link-label" class="sr-only">Link label</label>
+            <input type="text" id="link-label" placeholder="Label (e.g. Gmail)" required aria-required="true" />
+          </div>
+          <div class="form-group">
+            <label for="link-url" class="sr-only">Link URL</label>
+            <input type="url" id="link-url" placeholder="https://…" required aria-required="true" />
+          </div>
+          <div class="form-row">
+            <button type="submit" class="btn btn-primary  btn-sm">Add</button>
+            <button type="button" class="btn btn-ghost    btn-sm" id="cancel-link-btn">Cancel</button>
+          </div>
+        </form>
+        <button class="btn btn-ghost btn-sm add-link-toggle" id="add-link-btn" aria-expanded="false">
+          <i data-feather="plus" aria-hidden="true"></i> Add Link
+        </button>
+      </section>
+
+      <!-- Activity Log -->
+      <section class="widget activity-widget" aria-labelledby="activity-title">
+        <h2 class="widget-title" id="activity-title"><i data-feather="activity" aria-hidden="true"></i> Recent Activity</h2>
+        <ul class="activity-list" id="activity-list" aria-label="Recent activity" aria-live="polite">
+          <li class="activity-empty">No recent activity.</li>
+        </ul>
+      </section>
+
+    </aside>
+
+    <!-- KANBAN BOARD -->
+    <section class="board-section" aria-labelledby="board-title">
+
+      <div class="board-header">
+        <h2 class="board-title" id="board-title">Task Board</h2>
+        <div class="board-actions">
+          <label for="sort-select" class="sr-only">Sort tasks by</label>
+          <select id="sort-select" class="sort-select" aria-label="Sort tasks">
+            <option value="none">Sort: Default</option>
+            <option value="priority">Sort: Priority</option>
+            <option value="duedate">Sort: Due Date</option>
+            <option value="created">Sort: Created</option>
+            <option value="status">Sort: Status</option>
+          </select>
+          <button class="btn btn-primary" id="add-task-btn" aria-label="Create a new task">
+            <i data-feather="plus" aria-hidden="true"></i> New Task
+          </button>
+        </div>
+      </div>
+
+      <!-- Mobile column tabs -->
+      <div class="column-tabs" id="column-tabs" role="tablist" aria-label="Kanban columns">
+        <button class="tab-btn active" data-col="todo"       role="tab" aria-selected="true">To Do</button>
+        <button class="tab-btn"        data-col="inprogress" role="tab" aria-selected="false">In Progress</button>
+        <button class="tab-btn"        data-col="review"     role="tab" aria-selected="false">Review</button>
+        <button class="tab-btn"        data-col="done"       role="tab" aria-selected="false">Done</button>
+      </div>
+
+      <!-- Kanban columns — NO inline event handlers; JS wires all events -->
+      <div class="kanban-board" id="kanban-board" role="region" aria-label="Kanban board">
+
+        <div class="kanban-col" id="col-todo"       data-col="todo">
+          <div class="col-header">
+            <span class="col-title">To Do</span>
+            <span class="col-count badge" id="count-todo"       aria-label="0 tasks">0</span>
+          </div>
+          <div class="task-list" id="tasks-todo"       data-col="todo"       role="list" aria-label="To Do tasks"       aria-dropeffect="move"></div>
+        </div>
+
+        <div class="kanban-col" id="col-inprogress"  data-col="inprogress">
+          <div class="col-header">
+            <span class="col-title">In Progress</span>
+            <span class="col-count badge" id="count-inprogress" aria-label="0 tasks">0</span>
+          </div>
+          <div class="task-list" id="tasks-inprogress" data-col="inprogress" role="list" aria-label="In Progress tasks" aria-dropeffect="move"></div>
+        </div>
+
+        <div class="kanban-col" id="col-review"      data-col="review">
+          <div class="col-header">
+            <span class="col-title">Review</span>
+            <span class="col-count badge" id="count-review"     aria-label="0 tasks">0</span>
+          </div>
+          <div class="task-list" id="tasks-review"     data-col="review"     role="list" aria-label="Review tasks"      aria-dropeffect="move"></div>
+        </div>
+
+        <div class="kanban-col" id="col-done"        data-col="done">
+          <div class="col-header">
+            <span class="col-title">Done</span>
+            <span class="col-count badge" id="count-done"       aria-label="0 tasks">0</span>
+          </div>
+          <div class="task-list" id="tasks-done"       data-col="done"       role="list" aria-label="Done tasks"        aria-dropeffect="move"></div>
+        </div>
+
+      </div><!-- /kanban-board -->
+    </section>
+
+  </main>
+</div><!-- /app -->
+
+<!-- =====================================================
+     MODAL: Add / Edit Task
+====================================================== -->
+<div class="modal-overlay hidden" id="task-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="task-modal-title">New Task</h3>
+      <button class="icon-btn" id="task-modal-close" aria-label="Close modal"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <form class="modal-form" id="task-form" novalidate>
+      <div class="form-group">
+        <label for="task-title">Title <span class="required" aria-hidden="true">*</span></label>
+        <input type="text" id="task-title" placeholder="Task title…" required aria-required="true" autocomplete="off" />
+        <span class="field-error hidden" id="title-error" role="alert">Title is required.</span>
+      </div>
+      <div class="form-group">
+        <label for="task-desc">Description</label>
+        <textarea id="task-desc" rows="2" placeholder="Optional details…" aria-label="Task description"></textarea>
+      </div>
+      <div class="form-row-2">
+        <div class="form-group">
+          <label id="priority-label">Priority</label>
+          <div class="priority-group" role="radiogroup" aria-labelledby="priority-label">
+            <label class="priority-option priority-high">
+              <input type="radio" name="priority" value="high" /> 🔴 High
+            </label>
+            <label class="priority-option priority-medium">
+              <input type="radio" name="priority" value="medium" checked /> 🟡 Med
+            </label>
+            <label class="priority-option priority-low">
+              <input type="radio" name="priority" value="low" /> 🟢 Low
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="task-column">Column</label>
+          <select id="task-column" aria-label="Starting column">
+            <option value="todo">To Do</option>
+            <option value="inprogress">In Progress</option>
+            <option value="review">Review</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div class="form-group">
+          <label for="task-due-date">Due Date</label>
+          <div class="due-date-quick" role="group" aria-label="Quick date shortcuts">
+            <button type="button" class="btn btn-ghost btn-sm quick-date" data-offset="0">Today</button>
+            <button type="button" class="btn btn-ghost btn-sm quick-date" data-offset="1">Tomorrow</button>
+            <button type="button" class="btn btn-ghost btn-sm quick-date" data-offset="7">Next Week</button>
+          </div>
+          <input type="date" id="task-due-date" aria-label="Task due date" />
+        </div>
+        <div class="form-group">
+          <label for="task-deadline">Deadline Time <span class="optional">(optional)</span></label>
+          <input type="time" id="task-deadline" aria-label="Deadline time" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div class="form-group">
+          <label for="task-assigned-name">Assigned To (Name)</label>
+          <input type="text"  id="task-assigned-name"  placeholder="Name"     autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label for="task-assigned-email">Assigned To (Email)</label>
+          <input type="email" id="task-assigned-email" placeholder="email@…"  autocomplete="off" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div class="form-group">
+          <label for="task-repeat">Repeat</label>
+          <select id="task-repeat" aria-label="Task repeat schedule">
+            <option value="none">None</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div class="form-group form-group-inline">
+          <label for="task-assigned-me">Assigned to Me</label>
+          <input type="checkbox" id="task-assigned-me" aria-label="Mark as assigned to me" />
+        </div>
+      </div>
+      <input type="hidden" id="task-id" value="" />
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary" id="task-submit-btn">
+          <span class="btn-text">Add Task</span>
+          <span class="btn-spinner hidden"><i data-feather="loader" aria-hidden="true"></i></span>
+        </button>
+        <button type="button" class="btn btn-ghost" id="task-cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: My Day Task
+====================================================== -->
+<div class="modal-overlay hidden" id="myday-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="myday-modal-title">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3 id="myday-modal-title">Add to My Day</h3>
+      <button class="icon-btn" id="myday-modal-close" aria-label="Close"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <form id="myday-form" class="modal-form">
+      <div class="form-group">
+        <label for="myday-title">Task <span class="required" aria-hidden="true">*</span></label>
+        <input type="text" id="myday-title" placeholder="What's on your plate today?" required aria-required="true" />
+      </div>
+      <div class="form-group">
+        <label for="myday-note">Note</label>
+        <input type="text" id="myday-note" placeholder="Quick note…" />
+      </div>
+      <div class="form-row-2">
+        <div class="form-group">
+          <label for="myday-reminder">Reminder</label>
+          <input type="time" id="myday-reminder" />
+        </div>
+        <div class="form-group">
+          <label for="myday-repeat">Repeat</label>
+          <select id="myday-repeat">
+            <option value="none">None</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary">Add</button>
+        <button type="button" class="btn btn-ghost" id="myday-cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: Share & Collaborate
+====================================================== -->
+<div class="modal-overlay hidden" id="share-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="share-modal-title">Share &amp; Collaborate</h3>
+      <button class="icon-btn" id="share-modal-close" aria-label="Close"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="share-board-id">
+        <label>Board ID</label>
+        <div class="copy-row">
+          <input type="text" id="share-board-id-input" readonly aria-label="Board ID" />
+          <button class="btn btn-ghost btn-sm" id="copy-board-id-btn" aria-label="Copy Board ID"><i data-feather="copy" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <div class="collaborators-section">
+        <h4>Collaborators</h4>
+        <ul id="collaborators-list" class="collaborators-list" aria-label="Collaborators" aria-live="polite"></ul>
+      </div>
+      <div class="invite-section">
+        <h4>Invite Someone</h4>
+        <form id="invite-form" class="invite-form" novalidate>
+          <div class="form-group">
+            <label for="invite-email">Email</label>
+            <input type="email" id="invite-email" placeholder="colleague@example.com" required aria-required="true" />
+          </div>
+          <div class="form-group">
+            <label for="invite-permission">Permission</label>
+            <select id="invite-permission" aria-label="Permission level">
+              <option value="editor">Editor — add, edit, move tasks</option>
+              <option value="viewer">Viewer — read only</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary" id="invite-submit-btn">
+            <i data-feather="send" aria-hidden="true"></i>
+            <span class="btn-text">Send Invitation</span>
+            <span class="btn-spinner hidden"><i data-feather="loader" aria-hidden="true"></i></span>
+          </button>
+        </form>
+      </div>
+      <div class="join-section">
+        <h4>Join a Board</h4>
+        <div class="form-row">
+          <label for="join-board-id" class="sr-only">Board ID to join</label>
+          <input type="text" id="join-board-id" placeholder="Paste Board ID…" class="join-input" />
+          <button class="btn btn-secondary" id="join-board-btn">Join</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: Edit Name
+====================================================== -->
+<div class="modal-overlay hidden" id="name-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="name-modal-title">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3 id="name-modal-title">Your Name</h3>
+      <button class="icon-btn" id="name-modal-close" aria-label="Close"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <form id="name-form" class="modal-form">
+      <div class="form-group">
+        <label for="name-input">Display Name</label>
+        <input type="text" id="name-input" placeholder="Enter your name" maxlength="40" autocomplete="nickname" />
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-ghost" id="name-cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: New Board
+====================================================== -->
+<div class="modal-overlay hidden" id="board-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="board-modal-title">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3 id="board-modal-title">New Board</h3>
+      <button class="icon-btn" id="board-modal-close" aria-label="Close"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <form id="board-form" class="modal-form">
+      <div class="form-group">
+        <label for="board-name-input">Board Name <span class="required" aria-hidden="true">*</span></label>
+        <input type="text" id="board-name-input" placeholder="e.g. Work Projects" required aria-required="true" />
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary" id="board-submit-btn">
+          <span class="btn-text">Create</span>
+          <span class="btn-spinner hidden"><i data-feather="loader" aria-hidden="true"></i></span>
+        </button>
+        <button type="button" class="btn btn-ghost" id="board-cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: Forgot Password
+====================================================== -->
+<div class="modal-overlay hidden" id="forgot-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="forgot-modal-title">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3 id="forgot-modal-title">Reset Password</h3>
+      <button class="icon-btn" id="forgot-modal-close" aria-label="Close"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <form id="forgot-form" class="modal-form">
+      <div class="form-group">
+        <label for="forgot-email">Email address</label>
+        <input type="email" id="forgot-email" placeholder="you@example.com" required aria-required="true" autocomplete="email" />
+      </div>
+      <p class="auth-error hidden" id="forgot-error"   role="alert"></p>
+      <p class="auth-success hidden" id="forgot-success" role="status"></p>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary" id="forgot-submit-btn">
+          <span class="btn-text">Send Reset Email</span>
+          <span class="btn-spinner hidden"><i data-feather="loader" aria-hidden="true"></i></span>
+        </button>
+        <button type="button" class="btn btn-ghost" id="forgot-cancel-btn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- =====================================================
+     MODAL: Settings
+====================================================== -->
+<div class="modal-overlay hidden" id="settings-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="settings-modal-title">Settings</h3>
+      <button class="icon-btn" id="settings-modal-close" aria-label="Close settings"><i data-feather="x" aria-hidden="true"></i></button>
+    </div>
+    <div class="modal-body settings-body">
+      <div class="settings-section">
+        <h4>Pomodoro Timer</h4>
+        <div class="form-group">
+          <label for="setting-focus">Focus Duration (minutes)</label>
+          <input type="number" id="setting-focus" min="1" max="120" value="25" />
+        </div>
+        <div class="form-group">
+          <label for="setting-short">Short Break (minutes)</label>
+          <input type="number" id="setting-short" min="1" max="30" value="5" />
+        </div>
+        <div class="form-group">
+          <label for="setting-long">Long Break (minutes)</label>
+          <input type="number" id="setting-long" min="1" max="60" value="15" />
+        </div>
+      </div>
+      <div class="settings-section">
+        <h4>Appearance</h4>
+        <div class="form-group form-group-inline">
+          <label for="setting-dark">Dark Mode</label>
+          <input type="checkbox" id="setting-dark" aria-label="Enable dark mode" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="settings-save-btn">Save Settings</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Pomodoro alarm (base64 WAV, works offline) -->
+<audio id="timer-alarm" preload="auto" aria-hidden="true">
+  <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhS0lthqmsqJNuXVxomKyxqZduYGFslqyxqJVwYWNrl6yxqJV0Y2RslayxqJZ1ZGRtlq2xqJZ2ZWRtlq2wqZZ3ZWVul62wqZZ5ZWZvl62wqJd5Zmdwl66wqJd6Z2hwl66wqJd7aGlxl66vqJd8aGlyma+vqJh9aWpym6+vqZh+amtzna+vqZh/a2x0n7CwqZiAa2x1oLCwqpmBbG12orCwqpmCbW53o7CxqpmDbm54pbGxq5mEb295p7GxrJqFcHB6qLKyrZqGcXF7qrKzrZqHcnJ8q7KzrpuIc3N9rLO0r5uJdHR+rbO0sJuKdXV/rrS1sZyLdnaAsLS1spyMd3eBsrS2s5yNd3iCs7W3tJ2OeHiDtLW3tZ2PeXmEtba4tp6QenqFtre5t56Qe3uGt7i6uJ+RfHyHuLi6uZ+SfX2Iubm7up+TfX6Kurq8u6CUfn+Ku7u9vKCVf4CMvLy+vaGWgIGNvb2/vqKXgYKOvr7AvqKYgoOPv7/BwaOZg4SQwMDCwqSag4WRwcHDw6WbhIWSw8PFxKachoaTxMTGxaeeh4eUxcXHxqefh4iVxsbIx6igi4mXyMjKyKqiio" type="audio/wav" />
+</audio>
+
+<!-- PWA service worker registration + install prompt -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
+
+<!-- Credentials file — excluded from Git via .gitignore -->
+<script src="js/firebase-config.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,215 @@
+// ============================================================
+//  Firestore Security Rules — Life & Daily Planner Dashboard
+//  Deploy with:  firebase deploy --only firestore:rules
+//  Or paste directly into:
+//    Firebase Console → Firestore → Rules tab
+// ============================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ----------------------------------------------------------
+    // HELPER FUNCTIONS
+    // ----------------------------------------------------------
+
+    /// True when the request comes from a signed-in user
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /// Shorthand for the caller's UID
+    function uid() {
+      return request.auth.uid;
+    }
+
+    /// True when the caller is the owner of a board document
+    function isBoardOwner(boardId) {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId == uid();
+    }
+
+    /// True when the caller has ANY membership record for this board
+    function isBoardMember(boardId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/boardMembers/$(boardId + '_' + uid()));
+    }
+
+    /// Returns the caller's permission string for a board ('owner'|'editor'|'viewer')
+    function boardPermission(boardId) {
+      return get(/databases/$(database)/documents/boardMembers/$(boardId + '_' + uid())).data.permission;
+    }
+
+    /// True when the caller is owner or editor of a board (can write tasks)
+    function canWrite(boardId) {
+      return isSignedIn() && (
+        isBoardOwner(boardId) ||
+        boardPermission(boardId) == 'editor'
+      );
+    }
+
+    /// True when the caller is owner, editor, OR viewer of a board (can read)
+    function canRead(boardId) {
+      return isSignedIn() && isBoardMember(boardId);
+    }
+
+    /// Prevents callers from escalating their own permission level
+    function noPermissionEscalation() {
+      return !request.resource.data.keys().hasAny(['permission']) ||
+             request.resource.data.permission in ['owner', 'editor', 'viewer'];
+    }
+
+    /// Ensures a field value is a non-empty string under a length limit
+    function validString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    // ----------------------------------------------------------
+    // USERS   /users/{userId}
+    // ----------------------------------------------------------
+    match /users/{userId} {
+      // Users can only read and write their OWN profile document
+      allow read:   if isSignedIn() && uid() == userId;
+      allow create: if isSignedIn() && uid() == userId
+                       && validString(request.resource.data.name,  100)
+                       && validString(request.resource.data.email, 200);
+      allow update: if isSignedIn() && uid() == userId
+                       && validString(request.resource.data.name,  100);
+      allow delete: if false; // profiles are never deleted client-side
+    }
+
+    // ----------------------------------------------------------
+    // BOARDS   /boards/{boardId}
+    // ----------------------------------------------------------
+    match /boards/{boardId} {
+      // Any board member can read the board document
+      allow read: if canRead(boardId);
+
+      // Authenticated users can create a board (they become owner)
+      allow create: if isSignedIn()
+                       && request.resource.data.ownerId == uid()
+                       && validString(request.resource.data.name, 100);
+
+      // Only the board owner can rename the board
+      allow update: if isBoardOwner(boardId)
+                       && validString(request.resource.data.name, 100)
+                       // Owner cannot change ownerId to someone else
+                       && request.resource.data.ownerId == uid();
+
+      // Only the board owner can delete the board
+      allow delete: if isBoardOwner(boardId);
+    }
+
+    // ----------------------------------------------------------
+    // BOARD MEMBERS   /boardMembers/{memberId}
+    // Naming convention:  memberId = boardId + '_' + uid
+    // ----------------------------------------------------------
+    match /boardMembers/{memberId} {
+      // A member can read their own membership record;
+      // board owners can read all membership records for their board
+      allow read: if isSignedIn() && (
+                    uid() == resource.data.uid ||
+                    isBoardOwner(resource.data.boardId)
+                  );
+
+      // Only the board owner can create memberships (invite someone)
+      allow create: if isBoardOwner(request.resource.data.boardId)
+                       && noPermissionEscalation()
+                       && request.resource.data.uid is string
+                       && request.resource.data.boardId is string;
+
+      // Only the board owner can change a member's permission
+      allow update: if isBoardOwner(resource.data.boardId)
+                       && noPermissionEscalation();
+
+      // Board owner can remove a member; a member can remove themselves
+      allow delete: if isBoardOwner(resource.data.boardId) ||
+                       uid() == resource.data.uid;
+    }
+
+    // ----------------------------------------------------------
+    // TASKS   /tasks/{taskId}
+    // ----------------------------------------------------------
+    match /tasks/{taskId} {
+      // Any board member (owner/editor/viewer) can read tasks
+      allow read: if canRead(resource.data.boardId);
+
+      // Only owners and editors can create tasks
+      allow create: if canWrite(request.resource.data.boardId)
+                       && validString(request.resource.data.title, 300)
+                       // The task must be stamped with the caller's UID
+                       && request.resource.data.createdBy == uid()
+                       // boardId must match an existing board the user can access
+                       && request.resource.data.boardId is string
+                       // Column must be a known value
+                       && request.resource.data.column in ['todo', 'inprogress', 'review', 'done']
+                       // Priority must be a known value
+                       && request.resource.data.priority in ['high', 'medium', 'low'];
+
+      // Only owners and editors can update tasks; boardId cannot be changed
+      allow update: if canWrite(resource.data.boardId)
+                       && request.resource.data.boardId == resource.data.boardId
+                       && validString(request.resource.data.title, 300)
+                       && request.resource.data.column in ['todo', 'inprogress', 'review', 'done']
+                       && request.resource.data.priority in ['high', 'medium', 'low'];
+
+      // Only owners and editors can delete tasks
+      allow delete: if canWrite(resource.data.boardId);
+    }
+
+    // ----------------------------------------------------------
+    // INVITATIONS   /invitations/{invitationId}
+    // ----------------------------------------------------------
+    match /invitations/{invitationId} {
+      // Board owner can read all invitations for their board;
+      // the invitee can read their own invitation (to accept it)
+      allow read: if isSignedIn() && (
+                    isBoardOwner(resource.data.boardId) ||
+                    request.auth.token.email == resource.data.email
+                  );
+
+      // Only board owners can create invitations
+      allow create: if isBoardOwner(request.resource.data.boardId)
+                       && request.resource.data.email is string
+                       && request.resource.data.permission in ['editor', 'viewer']
+                       && request.resource.data.invitedBy == uid();
+
+      // Invitee can update status (accept/decline); owner can update anything
+      allow update: if isSignedIn() && (
+                      isBoardOwner(resource.data.boardId) ||
+                      request.auth.token.email == resource.data.email
+                    );
+
+      // Only board owner can delete invitations
+      allow delete: if isBoardOwner(resource.data.boardId);
+    }
+
+    // ----------------------------------------------------------
+    // ACTIVITY LOGS   /activityLogs/{logId}
+    // ----------------------------------------------------------
+    match /activityLogs/{logId} {
+      // Any board member can read activity logs for their board
+      allow read: if canRead(resource.data.boardId);
+
+      // Owners and editors can create log entries (append-only)
+      allow create: if canWrite(request.resource.data.boardId)
+                       && request.resource.data.userId == uid()
+                       && request.resource.data.boardId is string
+                       && request.resource.data.action is string;
+
+      // Logs are immutable — no updates or deletes from the client
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ----------------------------------------------------------
+    // DENY EVERYTHING ELSE
+    // Any collection not explicitly listed above is blocked.
+    // ----------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}
